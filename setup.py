@@ -39,6 +39,9 @@ setup(name='TotalSegmentator',
             'pyarrow',
             'xmltodict'
         ],
+        extras_require={
+            'mlx': ['nnunet-mlx @ git+https://github.com/mhalle/nnunet-mlx.git'],
+        },
         zip_safe=False,
         classifiers=[
             'Intended Audience :: Science/Research',

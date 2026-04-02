@@ -21,7 +21,7 @@ import re
 
 
 def validate_device_type_api(value):
-    valid_strings = ["gpu", "cpu", "mps"]
+    valid_strings = ["gpu", "cpu", "mps", "mlx"]
     if value in valid_strings:
         return value
 
@@ -33,11 +33,11 @@ def validate_device_type_api(value):
         return value
 
     raise ValueError(
-        f"Invalid device type: '{value}'. Must be 'gpu', 'cpu', 'mps', or 'gpu:X' where X is an integer representing the GPU device ID.")
+        f"Invalid device type: '{value}'. Must be 'gpu', 'cpu', 'mps', 'mlx', or 'gpu:X' where X is an integer representing the GPU device ID.")
 
 
 def convert_device_to_cuda(device):
-    if device in ["cpu", "mps", "gpu"]:
+    if device in ["cpu", "mps", "gpu", "mlx"]:
         return device
     else:  # gpu:X
         return f"cuda:{device.split(':')[1]}"
@@ -54,10 +54,13 @@ def convert_device_to_string(device):
 def select_device(device):
     device = convert_device_to_cuda(device)
 
+    if device == "mlx":
+        return "mlx"
+
     # available devices: gpu | cpu | mps | gpu:1, gpu:2, etc.
-    if device == "gpu": 
+    if device == "gpu":
         device = "cuda"
-    if device.startswith("cuda"): 
+    if device.startswith("cuda"):
         if device == "cuda": device = "cuda:0"
         if not torch.cuda.is_available():
             print("No GPU detected. Running on CPU. This can be very slow. The '--fast' or the `--roi_subset` option can help to reduce runtime.")
