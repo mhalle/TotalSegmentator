@@ -195,6 +195,29 @@ def nnUNetv2_predict(dir_in, dir_out, task_id, model="3d_fullres", folds=None,
     """
     Identical to bash function nnUNetv2_predict
     """
+    # MLX backend: bypass PyTorch entirely
+    if device == "mlx":
+        from nnunet_mlx import nnUNetv2_predict_mlx
+        nnUNetv2_predict_mlx(
+            dir_in=dir_in,
+            dir_out=dir_out,
+            task_id=task_id,
+            model=model,
+            folds=folds,
+            trainer=trainer,
+            tta=tta,
+            plans=plans,
+            step_size=step_size,
+            quiet=quiet,
+        )
+        if save_probabilities_path is not None:
+            import shutil
+            from pathlib import Path
+            prob_file = Path(dir_out) / "s01.npz"
+            if prob_file.exists():
+                shutil.copy(prob_file, save_probabilities_path)
+        return
+
     dir_in = str(dir_in)
     dir_out = str(dir_out)
 

@@ -11,7 +11,7 @@ def validate_device_type(value):
         return validate_device_type_api(value)
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"Invalid device type: '{value}'. Must be 'gpu', 'cpu', 'mps', or 'gpu:X' where X is an integer representing the GPU device ID.")
+            f"Invalid device type: '{value}'. Must be 'gpu', 'cpu', 'mps', 'mlx', or 'gpu:X' where X is an integer representing the GPU device ID.")
 
 
 def normalize_output_types(values):
