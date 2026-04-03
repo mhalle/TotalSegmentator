@@ -10,7 +10,7 @@ from pathlib import Path
 from os.path import join
 from typing import Union
 from functools import partial
-from multiprocessing import Pool
+from multiprocessing.pool import ThreadPool
 import tempfile
 import inspect
 import warnings
@@ -361,16 +361,13 @@ def reassemble_image(tmp_dir, original_shape, original_affine, third, margin):
     return nib.Nifti1Image(combined_img, original_affine)
 
 
-def save_segmentation_nifti(class_map_item, tmp_dir=None, file_out=None, nora_tag=None, header=None, task_name=None, quiet=None):
+def save_segmentation_nifti(class_map_item, img_data=None, affine=None, file_out=None, nora_tag=None, header=None, task_name=None, quiet=None):
     k, v = class_map_item
-    # Have to load img inside of each thread. If passing it as argument a lot slower.
     if not task_name.startswith("total") and not quiet:
         print(f"Creating {v}.nii.gz")
-    img = nib.load(tmp_dir / "s01.nii.gz")
-    img_data = img.get_fdata()
     binary_img = img_data == k
     output_path = str(file_out / f"{v}.nii.gz")
-    nib.save(nib.Nifti1Image(binary_img.astype(np.uint8), img.affine, header), output_path)
+    nib.save(nib.Nifti1Image(binary_img.astype(np.uint8), affine, header), output_path)
     if nora_tag != "None":
         subprocess.call(f"/opt/nora/src/node/nora -p {nora_tag} --add {output_path} --addtag mask", shell=True)
 
@@ -863,11 +860,10 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
                                 if nora_tag != "None":
                                     subprocess.call(f"/opt/nora/src/node/nora -p {nora_tag} --add {output_path} --addtag mask", shell=True)
                         else:
-                            nib.save(img_pred, tmp_dir / "s01.nii.gz")  # needed inside of threads
-                            pool = Pool(nr_threads_saving)
+                            pool = ThreadPool(nr_threads_saving)
                             results = []
                             for k, v in selected_classes.items():
-                                results.append(pool.starmap_async(save_segmentation_nifti, [((k, v), tmp_dir, file_out, nora_tag, new_header, task_name, quiet)]))
+                                results.append(pool.starmap_async(save_segmentation_nifti, [((k, v), img_data, img_pred.affine, file_out, nora_tag, new_header, task_name, quiet)]))
                             _ = [i.get() for i in results]
                             pool.close()
                             pool.join()
