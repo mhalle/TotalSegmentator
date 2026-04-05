@@ -197,7 +197,7 @@ def nnUNetv2_predict(dir_in, dir_out, task_id, model="3d_fullres", folds=None,
     """
     # MLX backend: bypass PyTorch entirely
     if device == "mlx":
-        from nnunet_mlx import nnUNetv2_predict_mlx
+        from totalsegmentator.mlx_predict import nnUNetv2_predict_mlx
         nnUNetv2_predict_mlx(
             dir_in=dir_in,
             dir_out=dir_out,

@@ -40,7 +40,7 @@ setup(name='TotalSegmentator',
             'xmltodict'
         ],
         extras_require={
-            'mlx': ['nnunet-mlx @ git+https://github.com/mhalle/nnunet-mlx.git'],
+            'mlx': ['nnunet-inference-mlx @ git+https://github.com/mhalle/nnunet-inference-mlx.git@inference-engine'],
         },
         zip_safe=False,
         classifiers=[

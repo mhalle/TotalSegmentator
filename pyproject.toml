@@ -1,3 +1,8 @@
+[project]
+name = "TotalSegmentator"
+version = "2.6.0"
+requires-python = ">=3.12"
+
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
 exclude = [
