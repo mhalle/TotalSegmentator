@@ -1,5 +1,13 @@
 ## Master
 
+* MLX backend rewritten to use nnunet-inference-mlx InferenceEngine
+  - Lazy torch import: torch no longer loaded for MLX path, freeing ~2GB unified memory
+  - Metal cache limit (30% of RAM) prevents memory pressure on 16GB machines
+  - Streaming accumulator reduces peak memory for large volumes
+  - Analytical Gaussian computation replaces scipy dependency in hot path
+  - Fast mode: ~6s prediction (was ~8s)
+  - Full mode (5 models): ~2.6 min (was ~3.2 min)
+* Removed debug/diagnostic stderr output from mlx_predict.py
 
 
 ## Release 2.13.0 (17.03.2026)

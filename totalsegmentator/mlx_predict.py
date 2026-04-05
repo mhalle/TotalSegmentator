@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import gc
 import os
-import sys
 import time
 from glob import glob
 from pathlib import Path
@@ -21,11 +20,6 @@ import nibabel as nib
 import numpy as np
 
 from nnunet_inference_mlx import InferenceEngine, ModelBundle
-
-
-def _log(msg):
-    """Print to stderr to bypass TotalSegmentator's nostdout."""
-    print(msg, file=sys.stderr, flush=True)
 
 
 def find_model_folder(
@@ -78,33 +72,26 @@ def nnUNetv2_predict_mlx(
     Reads NIfTI files from dir_in, runs inference, saves results to dir_out.
     Uses InferenceEngine internally.
     """
-    _log(f"  [mlx] nnUNetv2_predict_mlx called: task_id={task_id}, trainer={trainer}")
-
     dir_in = Path(dir_in)
     dir_out = Path(dir_out)
     dir_out.mkdir(parents=True, exist_ok=True)
 
     model_folder = find_model_folder(task_id, trainer, plans, model)
-    _log(f"  [mlx] Model folder: {model_folder}")
     fold = (folds or [0])[0]
 
-    _log(f"  [mlx] Loading model (task {task_id})...")
-    st_init = time.perf_counter()
     bundle = ModelBundle.from_folder(model_folder, fold=fold)
-    _log(f"  [mlx] Bundle loaded, building engine...")
     engine = InferenceEngine(
         bundle,
         configuration=model,
         step_size=step_size,
         compile=use_compile,
         batch_size=batch_size,
-        verbose=False,
+        verbose=verbose,
     )
-    dt_init = time.perf_counter() - st_init
-    mem_cache = mx.get_cache_memory() / 1e9
-    _log(f"  [mlx] Engine ready in {dt_init:.1f}s "
-         f"({engine.num_classes} cls, patch {engine.patch_size}, "
-         f"batch={engine._batch_size}, cache={mem_cache:.1f}GB)")
+
+    if not quiet:
+        print(f"MLX inference: task {task_id}, {engine.num_classes} classes, "
+              f"patch {engine.patch_size}, batch={engine._batch_size}")
 
     # Process input files
     nifti_files = sorted(glob(str(dir_in / "*_0000.nii.gz")))
@@ -116,33 +103,33 @@ def nnUNetv2_predict_mlx(
         out_name = fname.replace("_0000.nii.gz", ".nii.gz")
         out_path = dir_out / out_name
 
-        _log(f"  [mlx] Processing {fname}")
+        if not quiet:
+            print(f"  Processing {fname}")
 
         img = nib.load(fpath)
         data = np.asarray(img.dataobj, dtype=np.float32)
 
-        # nibabel gives (X, Y, Z), engine expects (Z, Y, X)
+        # Relabel nibabel (X, Y, Z) as nnU-Net (Z, Y, X).
+        # View only — no data movement.
         vol_zyx = data.transpose(2, 1, 0)
 
         st = time.perf_counter()
         logits = engine.predict(vol_zyx)
         dt = time.perf_counter() - st
 
-        # logits: (K, Z, Y, X) → segmentation → back to nibabel (X, Y, Z)
-        seg = np.argmax(logits, axis=0)
+        # logits: (K, Z, Y, X) → segmentation → back to nibabel order
+        seg = np.argmax(logits, axis=0).astype(np.uint8)
         seg = seg.transpose(2, 1, 0)
 
-        _log(f"  [mlx] Predicted in {dt:.1f}s ({np.unique(seg).size} labels)")
+        if not quiet:
+            print(f"  Predicted in {dt:.1f}s ({np.unique(seg).size} labels)")
 
-        seg_img = nib.Nifti1Image(seg.astype(np.uint8), img.affine, img.header)
+        seg_img = nib.Nifti1Image(seg, img.affine, img.header)
         nib.save(seg_img, str(out_path))
 
     # Free MLX compiled graph and cache before returning.
     # TotalSegmentator calls this function 5 times in full mode —
-    # without cleanup, the 9.5GB Metal cache accumulates and OOMs.
+    # without cleanup, the Metal cache accumulates and OOMs.
     del engine, bundle, logits
     gc.collect()
     mx.clear_cache()
-
-    mem_after = mx.get_cache_memory() / 1e9
-    _log(f"  [mlx] Cleanup: cache={mem_after:.1f}GB")
