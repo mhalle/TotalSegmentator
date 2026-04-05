@@ -9,7 +9,14 @@ import tempfile
 import numpy as np
 import nibabel as nib
 from nibabel.nifti1 import Nifti1Image
-import torch
+# Lazy torch import — avoid loading 2GB into memory for MLX path
+torch = None
+def _get_torch():
+    global torch
+    if torch is None:
+        import torch as _torch
+        torch = _torch
+    return torch
 from totalsegmentator.statistics import get_basic_statistics, get_radiomics_features_for_entire_dir
 from totalsegmentator.libs import download_pretrained_weights
 from totalsegmentator.config import setup_nnunet, setup_totalseg, increase_prediction_counter
@@ -62,13 +69,13 @@ def select_device(device):
         device = "cuda"
     if device.startswith("cuda"):
         if device == "cuda": device = "cuda:0"
-        if not torch.cuda.is_available():
+        if not _get_torch().cuda.is_available():
             print("No GPU detected. Running on CPU. This can be very slow. The '--fast' or the `--roi_subset` option can help to reduce runtime.")
             device = "cpu"
         else:
             device_id = int(device[5:])
-            if device_id < torch.cuda.device_count():
-                device = torch.device(device)
+            if device_id < _get_torch().cuda.device_count():
+                device = _get_torch().device(device)
             else:
                 print("Invalid GPU config, running on the CPU")
                 device = "cpu"
@@ -125,9 +132,13 @@ def totalsegmentator(input: Union[str, Path, Nifti1Image], output: Union[str, Pa
 
     nora_tag = "None" if nora_tag is None else nora_tag
 
-    # Store initial torch settings
-    initial_cudnn_benchmark = torch.backends.cudnn.benchmark
-    initial_num_threads = torch.get_num_threads()
+    # Store initial torch settings (skip for MLX — torch not needed)
+    if device != "mlx":
+        initial_cudnn_benchmark = _get_torch().backends.cudnn.benchmark
+        initial_num_threads = _get_torch().get_num_threads()
+    else:
+        initial_cudnn_benchmark = None
+        initial_num_threads = None
 
     validate_device_type_api(device)
     device = select_device(device)
@@ -864,8 +875,9 @@ def totalsegmentator(input: Union[str, Path, Nifti1Image], output: Union[str, Pa
             if not quiet: print(f"  calculated in {time.time()-st:.2f}s")
 
     # Restore initial torch settings
-    torch.backends.cudnn.benchmark = initial_cudnn_benchmark
-    torch.set_num_threads(initial_num_threads)
+    if device != "mlx":
+        _get_torch().backends.cudnn.benchmark = initial_cudnn_benchmark
+        _get_torch().set_num_threads(initial_num_threads)
 
     if statistics or statistics_fast:
         return seg_img, stats
