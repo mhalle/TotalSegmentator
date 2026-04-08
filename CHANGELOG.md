@@ -1,14 +1,36 @@
 ## Master
 
-* MLX backend rewritten to use nnunet-inference-mlx InferenceEngine
-  - Lazy torch import: torch no longer loaded for MLX path, freeing ~2GB unified memory
-  - Metal cache limit (30% of RAM) prevents memory pressure on 16GB machines
-  - Streaming accumulator reduces peak memory for large volumes
-  - Analytical Gaussian computation replaces scipy dependency in hot path
-  - Fast mode: ~6s prediction (was ~8s)
-  - Full mode (5 models): ~2.6 min (was ~3.2 min)
-* Removed debug/diagnostic stderr output from mlx_predict.py
 
+## Release 2.13.0+mlx.1 (07.04.2026)
+
+Fork-only build on top of upstream 2.13.0 with the MLX backend additions.
+Uses `2.13.0+mlx.N` versioning so this fork's releases can never collide
+with future upstream point releases.
+
+* **MLX backend** (`device="mlx"`) routes inference through `nnunet-inference-mlx` instead of PyTorch. Bypasses torch entirely on the MLX path for substantial memory and latency wins on Apple Silicon.
+* MLX backend rewritten to use `nnunet-inference-mlx`'s `InferenceEngine` (single source of truth for the sliding-window loop, weight loading, and patch dispatch). Requires `nnunet-inference-mlx >= 0.3.1`.
+  - Lazy torch import: torch no longer loaded for the MLX path, freeing ~2GB of unified memory.
+  - Metal cache limit (30% of system RAM) prevents memory pressure on 16GB machines.
+  - Streaming accumulator reduces peak memory for large volumes.
+  - Analytical Gaussian computation replaces scipy dependency in the hot path.
+  - Fast mode: ~6s prediction (was ~8s).
+  - Full mode (5 models): ~2.6 min (was ~3.2 min).
+  - **Per-patch progress bar on MLX path.** `mlx_predict.py` now passes `progress=not quiet` to `InferenceEngine`, matching the tqdm bar that nnUNetPredictor has always shown on the PyTorch / MPS path.
+* Add duckn / ZMP input path for MLX inference.
+* Remove `[project]` table from `pyproject.toml` (avoids conflict with `setup.py` as the source of truth in this fork).
+* Point MLX dependency at the `nnunet-inference-mlx` main branch.
+* Removed debug / diagnostic stderr output from `mlx_predict.py`.
+
+### Other fork-side fixes that landed since upstream 2.13.0
+* `nostdout()` now restores `sys.stdout` even after an exception during the wrapped block.
+* Extract `split_image_into_parts`, `save_merged_predictions`, `reassemble_image` into testable top-level functions; rewrite the corresponding tests.
+* Fix split sub-volume affine origins (s02 and s03) and end-to-end split affine handling.
+* Fix `get_basic_statistics()` path-type check to accept all path-like inputs.
+* Fix `get_basic_statistics()` to always return stats.
+* Fix radiomics pipeline: swapped arguments and path type error.
+* Fix `NameError` in `undo_canonical_nifti()`.
+* Optimize binary export with a `ThreadPool` to avoid redundant I/O.
+* Define CNN download paths for new body-stats models.
 
 ## Release 2.13.0 (17.03.2026)
 * when saving DICOM SEG or RT Struct try to infer orientation from DICOM input and rotate segmentation to match
