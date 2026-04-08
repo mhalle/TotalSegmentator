@@ -87,6 +87,7 @@ def nnUNetv2_predict_mlx(
         compile=use_compile,
         batch_size=batch_size,
         verbose=verbose,
+        progress=not quiet,
     )
 
     if not quiet:
