@@ -32,6 +32,68 @@ import SimpleITK as sitk
 from nnunet_inference_mlx import InferenceEngine, ModelBundle
 
 
+# ---------------------------------------------------------------------------
+# Engine cache — skips compile/warmup between calls in batch / full-mode runs
+# ---------------------------------------------------------------------------
+#
+# TotalSegmentator's full-body workflow calls this module's predict function
+# 5 times per case (one per sub-model). Each fresh InferenceEngine pays ~2-3 s
+# of mx.compile + warmup overhead before its first sliding-window forward.
+# Across 5 models that's 10-15 s of pure setup time per case, comparable to
+# the actual inference cost on fast hardware (M1 Max etc.).
+#
+# Caching the InferenceEngine across calls eliminates that overhead from the
+# second invocation onward. The cache key is the tuple of arguments that
+# determine engine identity (task / model / fold list / step / batch / compile).
+# Two callers asking for the same configuration share the same engine.
+#
+# Memory: each cached engine holds ~600 MB of MLX state. Five cached engines
+# is ~3 GB. On a 64 GB Mac that's trivial; on a 16 GB Mac it's a real fraction
+# of working memory and can OOM the rest of TS's pipeline. So caching is
+# auto-disabled on Macs with < 32 GB unified memory — same threshold the
+# nnunet-inference-mlx Predictor uses for its cache_limit_fraction auto-tier.
+#
+# Override the auto-detect via the TOTALSEG_MLX_CACHE_ENGINES env var
+# (set to "1" or "0") if the heuristic doesn't match your workload.
+
+_ENGINE_CACHE: dict[tuple, InferenceEngine] = {}
+
+
+def _cache_enabled() -> bool:
+    """Should this process cache InferenceEngines across calls?
+
+    Auto-detects from unified memory; override via TOTALSEG_MLX_CACHE_ENGINES.
+    """
+    env = os.environ.get("TOTALSEG_MLX_CACHE_ENGINES")
+    if env is not None:
+        return env.strip() not in ("", "0", "false", "False", "no", "No")
+    try:
+        import mlx.core as mx
+        ram_gb = mx.device_info().get("memory_size", 0) / 1e9
+        return ram_gb >= 32
+    except Exception:
+        return False
+
+
+def clear_engine_cache() -> None:
+    """Release all cached InferenceEngines and free their Metal memory.
+
+    Call between unrelated TS workflows in a long-running process when you
+    want to reclaim engine memory without exiting Python.
+    """
+    for engine in _ENGINE_CACHE.values():
+        try:
+            engine.close()
+        except Exception:
+            pass
+    _ENGINE_CACHE.clear()
+    try:
+        import mlx.core as mx
+        mx.clear_cache()
+    except Exception:
+        pass
+
+
 def find_model_folder(
     task_id: int,
     trainer: str = "nnUNetTrainer",
@@ -95,34 +157,54 @@ def nnUNetv2_predict_mlx(
     * ``model`` — plans configuration name (passed through; the engine
       can also auto-detect from the checkpoint's ``init_args``).
 
-    All inference state is released on function return via the engine's
-    context manager — important because TotalSegmentator's full-body
-    pipeline calls this five times in one process and the Metal
-    allocator would otherwise accumulate buffers between calls.
+    On Macs with >= 32 GB unified memory, the InferenceEngine is cached
+    across calls (keyed on engine identity), so subsequent calls — and
+    subsequent invocations from TS's full-mode pipeline — reuse the
+    compiled network and skip ~2-3 s of warmup per model. On smaller Macs
+    the cache is auto-disabled to avoid holding ~3 GB of inference state
+    across multiple sub-models. Override with the TOTALSEG_MLX_CACHE_ENGINES
+    env var (set to "1" or "0"). Call :func:`clear_engine_cache` to
+    release cached engines manually.
     """
     dir_in = Path(dir_in)
     dir_out = Path(dir_out)
     dir_out.mkdir(parents=True, exist_ok=True)
 
     model_folder = find_model_folder(task_id, trainer, plans, model)
+    folds_norm = tuple(folds) if folds else (0,)
 
-    # Honor the full fold list. Single fold → length-1 bundle (logits).
-    # Multi-fold → ensemble (softmax-averaged for standard, sigmoid-
-    # averaged for region-based; argmax/threshold-paint downstream picks
-    # the right scheme automatically).
-    bundle = ModelBundle.from_folder(model_folder, folds=folds or 0)
+    cache_enabled = _cache_enabled()
+    # Engine identity: anything that would change the compiled graph or
+    # weights. Step size, batch, compile, and tta all affect engine state.
+    cache_key = (
+        str(model_folder), model, folds_norm,
+        step_size, use_compile, batch_size, bool(tta),
+    )
+    engine = _ENGINE_CACHE.get(cache_key) if cache_enabled else None
 
-    with InferenceEngine(
-        bundle,
-        configuration=model,
-        step_size=step_size,
-        compile=use_compile,
-        batch_size=batch_size,
-        use_mirroring=tta,
-        verbose=verbose,
-        progress=not quiet,
-    ) as engine:
+    if engine is None:
+        bundle = ModelBundle.from_folder(model_folder, folds=folds or 0)
+        engine = InferenceEngine(
+            bundle,
+            configuration=model,
+            step_size=step_size,
+            compile=use_compile,
+            batch_size=batch_size,
+            use_mirroring=tta,
+            verbose=verbose,
+            progress=not quiet,
+        )
+        if cache_enabled:
+            _ENGINE_CACHE[cache_key] = engine
+        owns_engine = not cache_enabled
+    else:
+        bundle = None  # bundle held inside the cached engine's predictor
+        owns_engine = False
         if not quiet:
+            print(f"MLX inference: task {task_id} (engine cached, reused)")
+
+    try:
+        if bundle is not None and not quiet:
             n_folds = len(bundle.fold_weights)
             suffix = f", folds={n_folds}" if n_folds > 1 else ""
             print(
@@ -174,10 +256,10 @@ def nnUNetv2_predict_mlx(
             seg_img = sitk.GetImageFromArray(seg_zyx)
             seg_img.CopyInformation(img)
             sitk.WriteImage(seg_img, str(out_path))
-
-    # engine.close() and its Metal-cache clear ran on context-manager exit.
-    # The explicit GC sweeps any Python-side references that the loop
-    # held; harmless on the single-call path, mildly helpful when TS
-    # invokes this five times back-to-back for the full-body workflow.
-    del bundle
-    gc.collect()
+    finally:
+        if owns_engine:
+            # Caching disabled — release engine + Metal cache on this call's
+            # exit, matching the pre-cache behavior.
+            engine.close()
+        del bundle
+        gc.collect()
