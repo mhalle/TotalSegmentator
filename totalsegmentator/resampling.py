@@ -76,6 +76,54 @@ def resample_img_cucim(img, zoom=0.5, order=0, nr_cpus=-1):
     return resampled_img
 
 
+def _resample_nearest_torch(data, new_shape, device="mps"):
+    """Pure nearest-neighbour resample of a 3D label array on the GPU.
+
+    Three per-axis ``index_select`` gathers (half-pixel centred, edge-clamped) —
+    no one-hot, no interpolation. This is the label analogue of scipy
+    ``ndimage.zoom(order=0)`` and is what a full multi-label map (100+ classes,
+    no roi_subset) wants for the upsample back to acquisition resolution: the
+    one-hot path is infeasible there (runtime + memory), exactly as upstream TS
+    notes for its CPU path.
+    """
+    import torch
+    # labels as int16 (MPS has no float64); index_select is dtype-agnostic.
+    t = torch.as_tensor(np.ascontiguousarray(data).astype(np.int16)).to(device)
+    for ax in range(3):
+        n_in, n_out = t.shape[ax], int(new_shape[ax])
+        if n_in == n_out:
+            continue
+        f = n_in / n_out
+        idx = ((torch.arange(n_out, device=device, dtype=torch.float32) + 0.5) * f - 0.5)
+        idx = idx.round().long().clamp_(0, n_in - 1)
+        t = t.index_select(ax, idx)
+    return t.cpu().numpy()
+
+
+def resample_img_torch(data, new_shape, mode="data", device="mps"):
+    """GPU resample of a 3D array [x,y,z] to ``new_shape`` on MPS / CUDA / CPU.
+
+    The torch analogue of ``resample_img_cucim`` (which needs cupy+cucim, so only
+    ever runs on CUDA). ``mode``:
+      * ``"data"``    — anti-aliased: factor-scaled Catmull-Rom on downsampling
+                        axes, linear on upsampling (nnunetv2 ``resample_aa_torch``).
+                        Band-limits when shrinking, so detail does not alias.
+      * ``"onehot"``  — label-preserving one-hot + AA + argmax (smoother label
+                        boundaries; only feasible for few labels / roi_subset).
+      * ``"nearest"`` — pure nearest-neighbour label gather (cheap; for full
+                        multi-label maps).
+    """
+    new_shape = tuple(int(s) for s in new_shape)
+    if mode == "nearest":
+        return _resample_nearest_torch(data, new_shape, device=device)
+    from nnunetv2.preprocessing.resampling.resample_gpu_aa import resample_aa_torch
+    is_seg = (mode == "onehot")
+    arr = (np.ascontiguousarray(data).astype(np.int16 if is_seg else np.float32))[None]
+    out = resample_aa_torch(arr, new_shape, is_seg=is_seg, device=device,
+                            seg_resample_chunk_labels=8)
+    return out[0]
+
+
 def resample_img_nnunet(data, mask=None, original_spacing=1.0, target_spacing=2.0,
                        order_data=3, order_seg=0):
     """
@@ -200,7 +248,27 @@ def change_spacing(img_in, new_spacing=1.25, target_shape=None, order=0, nr_cpus
     # vecs = affine[:3, :3]
     # spacing = tuple(np.sqrt(np.sum(vecs ** 2, axis=0)))
 
-    if nnunet_resample:
+    # Opt-in GPU anti-aliased path (TS_GPU_AA_RESAMPLE=mps|cuda|cpu|1). torch-
+    # based, so it runs on Apple Silicon (MPS) where the cucim path cannot, and
+    # it anti-aliases on downsampling (scipy/cucim here use anti_aliasing=False).
+    #
+    # Scope: image *data* only (the forward acquisition->model resample). Label
+    # resampling stays on the CPU paths below: scipy nearest (order 0) is already
+    # fast and its input (a coarse prediction) is too small for the GPU transfer
+    # to pay off, and the one-hot path is only used for a few-label roi_subset.
+    # The forward image resample is where the cost (and the aliasing) lives,
+    # especially on large volumes.
+    _aa = os.environ.get("TS_GPU_AA_RESAMPLE", "0").lower()
+    _use_aa = (_aa not in ("0", "", "false", "off") and data.ndim == 3
+               and not nnunet_resample and order != 0)
+    if _use_aa:
+        _dev = _aa if _aa in ("mps", "cuda", "cpu") else "mps"
+        if target_shape is not None:
+            new_shape = tuple(int(s) for s in target_shape)
+        else:
+            new_shape = tuple(int(round(o * z)) for o, z in zip(old_shape, zoom))
+        new_data = resample_img_torch(data, new_shape, mode="data", device=_dev)
+    elif nnunet_resample:
         # new_data, _ = resample_img_nnunet(data, None, img_spacing, new_spacing, order_data=order, order_seg=order)
         _, new_data = resample_img_nnunet(None, data, img_spacing, new_spacing, order_data=order, order_seg=order)
     else:
