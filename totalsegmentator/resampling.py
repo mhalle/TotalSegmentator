@@ -79,7 +79,7 @@ def resample_img_cucim(img, zoom=0.5, order=0, nr_cpus=-1):
 def _resample_nearest_torch(data, new_shape, device="mps"):
     """Pure nearest-neighbour resample of a 3D label array on the GPU.
 
-    Three per-axis ``index_select`` gathers (half-pixel centred, edge-clamped) —
+    Three per-axis ``index_select`` gathers (half-pixel centred, edge-clamped) -
     no one-hot, no interpolation. This is the label analogue of scipy
     ``ndimage.zoom(order=0)`` and is what a full multi-label map (100+ classes,
     no roi_subset) wants for the upsample back to acquisition resolution: the
@@ -105,12 +105,12 @@ def resample_img_torch(data, new_shape, mode="data", device="mps"):
 
     The torch analogue of ``resample_img_cucim`` (which needs cupy+cucim, so only
     ever runs on CUDA). ``mode``:
-      * ``"data"``    — anti-aliased: factor-scaled Catmull-Rom on downsampling
+      * ``"data"``    - anti-aliased: factor-scaled Catmull-Rom on downsampling
                         axes, linear on upsampling (nnunetv2 ``resample_aa_torch``).
                         Band-limits when shrinking, so detail does not alias.
-      * ``"onehot"``  — label-preserving one-hot + AA + argmax (smoother label
+      * ``"onehot"``  - label-preserving one-hot + AA + argmax (smoother label
                         boundaries; only feasible for few labels / roi_subset).
-      * ``"nearest"`` — pure nearest-neighbour label gather (cheap; for full
+      * ``"nearest"`` - pure nearest-neighbour label gather (cheap; for full
                         multi-label maps).
     """
     new_shape = tuple(int(s) for s in new_shape)
