@@ -119,8 +119,16 @@ def resample_img_torch(data, new_shape, mode="data", device="mps"):
     from nnunetv2.preprocessing.resampling.resample_gpu_aa import resample_aa_torch
     is_seg = (mode == "onehot")
     arr = (np.ascontiguousarray(data).astype(np.int16 if is_seg else np.float32))[None]
+    # For the smooth (one-hot) label upsample, size the label chunk to the OUTPUT
+    # grid so peak memory stays ~1 GB regardless of label count: at full
+    # resolution (e.g. 768^3) this is 1 -> pure region-by-region streaming, the
+    # MLX-style channel-stream, so a 100+-class map never materializes all labels.
+    chunk = 8
+    if is_seg:
+        vox = int(np.prod(new_shape))
+        chunk = max(1, 1_000_000_000 // (vox * 4))
     out = resample_aa_torch(arr, new_shape, is_seg=is_seg, device=device,
-                            seg_resample_chunk_labels=8)
+                            seg_resample_chunk_labels=chunk)
     return out[0]
 
 
@@ -258,16 +266,24 @@ def change_spacing(img_in, new_spacing=1.25, target_shape=None, order=0, nr_cpus
     # to pay off, and the one-hot path is only used for a few-label roi_subset.
     # The forward image resample is where the cost (and the aliasing) lives,
     # especially on large volumes.
+    # Routed onto the GPU when enabled:
+    #   * image data (order>0, not nnunet)   -> anti-aliased cubic/linear ("data")
+    #   * smooth label upsample (nnunet)     -> region-by-region one-hot ("onehot"),
+    #     memory-streamed so a 100+-class map at full res never materializes all
+    #     labels (the heavy case scipy warns is "infeasible runtime+memory").
+    # Plain nearest label upsample (order 0, no -ho) stays on scipy: it's already
+    # fast and its coarse input is too small for the GPU transfer to pay off.
     _aa = os.environ.get("TS_GPU_AA_RESAMPLE", "0").lower()
-    _use_aa = (_aa not in ("0", "", "false", "off") and data.ndim == 3
-               and not nnunet_resample and order != 0)
+    _aa_on = _aa not in ("0", "", "false", "off")
+    _use_aa = _aa_on and data.ndim == 3 and (nnunet_resample or order != 0)
     if _use_aa:
         _dev = _aa if _aa in ("mps", "cuda", "cpu") else "mps"
         if target_shape is not None:
             new_shape = tuple(int(s) for s in target_shape)
         else:
             new_shape = tuple(int(round(o * z)) for o, z in zip(old_shape, zoom))
-        new_data = resample_img_torch(data, new_shape, mode="data", device=_dev)
+        _mode = "onehot" if nnunet_resample else "data"
+        new_data = resample_img_torch(data, new_shape, mode=_mode, device=_dev)
     elif nnunet_resample:
         # new_data, _ = resample_img_nnunet(data, None, img_spacing, new_spacing, order_data=order, order_seg=order)
         _, new_data = resample_img_nnunet(None, data, img_spacing, new_spacing, order_data=order, order_seg=order)
