@@ -332,7 +332,7 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
                          save_binary=False, nr_threads_resampling=1, nr_threads_saving=6, force_split=False,
                          crop_addon=[3,3,3], roi_subset=None, output_type="nifti",
                          statistics=False, quiet=False, verbose=False, test=0, skip_saving=False,
-                         device="cuda", exclude_masks_at_border=True, no_derived_masks=False,
+                         device="cuda", torch_resample=False, exclude_masks_at_border=True, no_derived_masks=False,
                          v1_order=False, stats_aggregation="mean", remove_small_blobs=False,
                          normalized_intensities=False, nnunet_resampling=False,
                          save_probabilities=None, cascade=None, remove_outside_mask=None, remove_outside_dilation=None,
@@ -484,10 +484,12 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
             img_in_shape = img_in.shape
             img_in_zooms = img_in.header.get_zooms()
             img_in_rsp = change_spacing(img_in, resample,
-                                        order=3, dtype=np.int32, nr_cpus=nr_threads_resampling, use_gpu=use_gpu)  # 4 cpus instead of 1 makes it a bit slower
+                                        order=3, dtype=np.int32, nr_cpus=nr_threads_resampling, use_gpu=use_gpu,
+                                        torch_resample=torch_resample, device=device)  # 4 cpus instead of 1 makes it a bit slower
             if cascade:
                 cascade = change_spacing(cascade, resample,
-                                         order=0, dtype=np.uint8, nr_cpus=nr_threads_resampling, use_gpu=use_gpu)
+                                         order=0, dtype=np.uint8, nr_cpus=nr_threads_resampling, use_gpu=use_gpu,
+                                         torch_resample=torch_resample, device=device)
             if verbose:
                 print(f"  from shape {img_in.shape} to shape {img_in_rsp.shape}")
             if not quiet: print(f"  Resampled in {time.time() - st:.2f}s")
@@ -713,11 +715,13 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
                 # 3: identical to 2
                 img_pred = change_spacing(img_pred, resample, img_in_shape,
                                           order=1, dtype=np.uint8, nr_cpus=nr_threads_resampling,
-                                          force_affine=img_in.affine, nnunet_resample=True, use_gpu=use_gpu)
+                                          force_affine=img_in.affine, nnunet_resample=True, use_gpu=use_gpu,
+                                          torch_resample=torch_resample, device=device)
             else:
                 img_pred = change_spacing(img_pred, resample, img_in_shape,
                                         order=0, dtype=np.uint8, nr_cpus=nr_threads_resampling,
-                                        force_affine=img_in.affine, use_gpu=use_gpu)
+                                        force_affine=img_in.affine, use_gpu=use_gpu,
+                                        torch_resample=torch_resample, device=device)
             
 
         if verbose: print("Undoing canonical...")

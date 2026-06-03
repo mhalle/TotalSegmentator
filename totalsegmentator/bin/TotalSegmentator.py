@@ -166,6 +166,12 @@ def main():
     parser.add_argument("-d",'--device', type=validate_device_type, default="gpu",
                         help="Device type: 'gpu', 'cpu', 'mps', or 'gpu:X' where X is an integer representing the GPU device ID.")
 
+    parser.add_argument('--torch-resample', action="store_true", default=False,
+                        help="Use the torch resampling backend (runs on --device; anti-aliased on "
+                             "downsampling, so it works on Apple Silicon/MPS where cucim cannot). Applies to "
+                             "the forward image resample always, and to the smooth label inverse only with "
+                             "--higher_order_resampling. Default off: CPU scipy, bit-identical to upstream.")
+
     parser.add_argument("-q", "--quiet", action="store_true", help="Print no intermediate outputs",
                         default=False)
 
@@ -217,7 +223,7 @@ def main():
                      args.fast, args.nora_tag, args.preview, args.task, args.roi_subset,
                      args.statistics, args.radiomics, args.crop_path, args.body_seg,
                      args.force_split, args.output_type, args.quiet, args.verbose, args.test, args.skip_saving,
-                     device=args.device, license_number=args.license_number,
+                     device=args.device, torch_resample=args.torch_resample, license_number=args.license_number,
                      statistics_exclude_masks_at_border=not args.stats_include_incomplete,
                      no_derived_masks=args.no_derived_masks, v1_order=args.v1_order, fastest=args.fastest,
                      roi_subset_robust=args.roi_subset_robust, stats_aggregation=args.stats_aggregation, 
