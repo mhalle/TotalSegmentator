@@ -77,7 +77,7 @@ def resample_img_cucim(img, zoom=0.5, order=0, nr_cpus=-1):
 
 
 def _resample_nearest_torch(data, new_shape, device="mps"):
-    """Nearest-neighbour resample of a 3D label array on the GPU, **exactly** as
+    """Nearest-neighbor resample of a 3D label array on the GPU, **exactly** as
     ``scipy.ndimage.zoom(order=0, mode="nearest")`` would (corner-aligned sample
     positions, scipy's own rounding) - the label analogue of ``resample_img(order=0)``
     that stock TS uses for the upsample back to acquisition resolution. Three per-axis
@@ -109,7 +109,7 @@ def resample_img_torch(data, new_shape, mode="data", device="mps", order=3, anti
       * ``"nearest"`` - exact ``zoom(order=0)`` label gather (cheap; full multi-label maps).
     ``anti_alias=True`` switches to the half-pixel, anti-aliased policy (Catmull-Rom
     band-limiting on downsampling). That is a distribution shift for models trained with
-    the scipy pipeline (it lowers recall on sub-centimetre structures), so it is opt-in.
+    the scipy pipeline (it lowers recall on sub-centimeter structures), so it is opt-in.
     """
     new_shape = tuple(int(s) for s in new_shape)
     if mode == "nearest":
