@@ -116,7 +116,8 @@ def resample_img_torch(data, new_shape, mode="data", device="mps", order=3, anti
         return _resample_nearest_torch(data, new_shape, device=device)
     from nnunetv2.preprocessing.resampling.resample_gpu_aa import resample_aa_torch
     is_seg = (mode == "onehot")
-    conv = {"convention": "center"} if anti_alias else {"convention": "corner", "order": int(order), "mode": "nearest"}
+    conv = ({"convention": "center", "anti_alias": True} if anti_alias
+            else {"convention": "corner", "order": int(order), "mode": "nearest", "anti_alias": False})
     arr = (np.ascontiguousarray(data).astype(np.int16 if is_seg else np.float32))[None]
     # For the smooth (one-hot) label upsample, size the label chunk to the OUTPUT
     # grid so peak memory stays ~1 GB regardless of label count: at full
