@@ -91,7 +91,7 @@ def _resample_nearest_torch(data, new_shape, device="mps"):
     from nnunetv2.preprocessing.resampling.resample_gpu_aa import resample_aa_torch
     arr = np.ascontiguousarray(data).astype(np.int16)[None]
     out = resample_aa_torch(arr, tuple(int(s) for s in new_shape), is_seg=True, device=device,
-                            convention="scipy", order=0, mode="nearest")
+                            convention="corner", order=0, mode="nearest")
     return out[0]
 
 
@@ -100,15 +100,15 @@ def resample_img_torch(data, new_shape, mode="data", device="mps", order=3, anti
 
     The torch analogue of ``resample_img`` / ``resample_img_cucim``, with the **same
     results as scipy** by default (``anti_alias=False``): ``nnunetv2.resample_aa_torch``
-    with ``convention="scipy"`` reproduces ``ndimage.zoom(order=order, mode="nearest")``
+    with ``convention="corner"`` (voxel-corner point grid) reproduces ``ndimage.zoom(order=order, mode="nearest")``
     - corner-aligned sampling, spline prefilter, no anti-aliasing - to float precision
     on CPU and ~1e-4 relative on MPS/CUDA. ``mode``:
       * ``"data"``    - image data (``order`` as passed by ``change_spacing``).
       * ``"onehot"``  - label-preserving one-hot + resample + argmax (smoother label
                         boundaries; only feasible for few labels / roi_subset).
       * ``"nearest"`` - exact ``zoom(order=0)`` label gather (cheap; full multi-label maps).
-    ``anti_alias=True`` switches to the half-pixel, anti-aliased policy (Catmull-Rom
-    band-limiting on downsampling). That is a distribution shift for models trained with
+    ``anti_alias=True`` switches to the voxel-center (half-pixel), anti-aliased policy
+    (Catmull-Rom band-limiting on downsampling). That is a distribution shift for models trained with
     the scipy pipeline (it lowers recall on sub-centimeter structures), so it is opt-in.
     """
     new_shape = tuple(int(s) for s in new_shape)
@@ -116,7 +116,7 @@ def resample_img_torch(data, new_shape, mode="data", device="mps", order=3, anti
         return _resample_nearest_torch(data, new_shape, device=device)
     from nnunetv2.preprocessing.resampling.resample_gpu_aa import resample_aa_torch
     is_seg = (mode == "onehot")
-    conv = {"convention": "grid"} if anti_alias else {"convention": "scipy", "order": int(order), "mode": "nearest"}
+    conv = {"convention": "center"} if anti_alias else {"convention": "corner", "order": int(order), "mode": "nearest"}
     arr = (np.ascontiguousarray(data).astype(np.int16 if is_seg else np.float32))[None]
     # For the smooth (one-hot) label upsample, size the label chunk to the OUTPUT
     # grid so peak memory stays ~1 GB regardless of label count: at full
