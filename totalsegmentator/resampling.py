@@ -88,9 +88,9 @@ def _resample_nearest_torch(data, new_shape, device="mps"):
     boundary to the model grid, and a half-pixel-vs-corner mismatch moves that grid by
     ~0.4 voxel, which alone took mean Dice against stock from 0.995 to 0.888 on a chest CT.
     """
-    from nnunetv2.preprocessing.resampling.resample_gpu_aa import resample_aa_torch
+    from nnunetv2.preprocessing.resampling.resample_gpu import resample_data_or_seg_to_shape_gpu
     arr = np.ascontiguousarray(data).astype(np.int16)[None]
-    out = resample_aa_torch(arr, tuple(int(s) for s in new_shape), is_seg=True, device=device,
+    out = resample_data_or_seg_to_shape_gpu(arr, tuple(int(s) for s in new_shape), is_seg=True, device=device,
                             convention="corner", order=0, mode="nearest")
     return out[0]
 
@@ -99,7 +99,7 @@ def resample_img_torch(data, new_shape, mode="data", device="mps", order=3, anti
     """GPU resample of a 3D array [x,y,z] to ``new_shape`` on MPS / CUDA / CPU.
 
     The torch analogue of ``resample_img`` / ``resample_img_cucim``, with the **same
-    results as scipy** by default (``anti_alias=False``): ``nnunetv2.resample_aa_torch``
+    results as scipy** by default (``anti_alias=False``): ``nnunetv2.resample_data_or_seg_to_shape_gpu``
     with ``convention="corner"`` (voxel-corner point grid) reproduces ``ndimage.zoom(order=order, mode="nearest")``
     - corner-aligned sampling, spline prefilter, no anti-aliasing - to float precision
     on CPU and ~1e-4 relative on MPS/CUDA. ``mode``:
@@ -114,7 +114,7 @@ def resample_img_torch(data, new_shape, mode="data", device="mps", order=3, anti
     new_shape = tuple(int(s) for s in new_shape)
     if mode == "nearest":
         return _resample_nearest_torch(data, new_shape, device=device)
-    from nnunetv2.preprocessing.resampling.resample_gpu_aa import resample_aa_torch
+    from nnunetv2.preprocessing.resampling.resample_gpu import resample_data_or_seg_to_shape_gpu
     is_seg = (mode == "onehot")
     conv = ({"convention": "center", "anti_alias": True} if anti_alias
             else {"convention": "corner", "order": int(order), "mode": "nearest", "anti_alias": False})
@@ -127,7 +127,7 @@ def resample_img_torch(data, new_shape, mode="data", device="mps", order=3, anti
     if is_seg:
         vox = int(np.prod(new_shape))
         chunk = max(1, 1_000_000_000 // (vox * 4))
-    out = resample_aa_torch(arr, new_shape, is_seg=is_seg, device=device,
+    out = resample_data_or_seg_to_shape_gpu(arr, new_shape, is_seg=is_seg, device=device,
                             seg_resample_chunk_labels=chunk, **conv)
     return out[0]
 
