@@ -434,8 +434,11 @@ def _preprocess_nnunet_array(predictor, data, properties):
 
 
 def _predict_preprocessed_nnunet_array(predictor, data, properties,
-                                       use_cropped_logits_resampling=False):
+                                       use_cropped_logits_resampling=False, on_logits=None):
     logits = predictor.predict_logits_from_preprocessed_data(data).cpu()
+    if on_logits is not None:
+        # The one moment the logits exist: smooth label maps are painted from them here.
+        on_logits(logits, properties)
     segmentation = convert_predicted_logits_to_segmentation_with_correct_shape(
         logits,
         predictor.plans_manager,
@@ -474,12 +477,16 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
                          normalized_intensities=False, higher_order_resampling_LEGACY=False,
                          save_probabilities=None, cascade=None, remove_outside_mask=None, remove_outside_dilation=None,
                          debug=False, save_lowres=False, resampling_order=3, plans="nnUNetPlans",
-                         vertebrae_body_mask=None, output_task_name=None, use_cropped_logits_resampling=False):
+                         vertebrae_body_mask=None, output_task_name=None, use_cropped_logits_resampling=False,
+                         smooth_labels=False):
     """
     crop: string or a nibabel image
     resample: None or float (target spacing for all dimensions) or list of floats
     resampling_order: interpolation order for input image resampling
     cascade: nibabel image or None
+    smooth_labels: interpolate each model's logits onto the input grid instead of upsampling the
+                   label map with nearest neighbor (see smooth_labels.py). "nearest" gives the
+                   default output through the same path (for testing).
 
     output_type may be a string or a list of strings (multi-output support)
     """
@@ -534,7 +541,18 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
 
     if save_lowres and crop is not None:
         raise ValueError("save_lowres is not supported together with cropping or roi_subset.")
-    
+
+    if smooth_labels:
+        if resample is None or save_lowres:
+            raise ValueError("smooth_labels needs a task that resamples, and an output at input resolution.")
+        if higher_order_resampling_LEGACY or save_probabilities is not None or test != 0:
+            raise ValueError("smooth_labels is not supported together with higher_order_resampling_LEGACY, "
+                             "save_probabilities or test mode.")
+        if task_name in ["body", "vertebrae_pp"] or remove_small_blobs:
+            # these edit the label map on the model grid, which the smooth label map never passes through
+            raise ValueError("smooth_labels is not supported together with remove_small_blobs or the "
+                             "body / vertebrae_pp postprocessing.")
+
     if v1_order and task_name in ["total", "total_v2"]:
         label_map = class_map["total_v1"]
     else:
@@ -744,6 +762,21 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
             cached_preprocessing_signature = None
             cached_preprocessed_inputs = None
 
+            smooth = None
+            if smooth_labels:
+                from totalsegmentator.smooth_labels import SmoothComposite
+                smooth = SmoothComposite(img_in.shape, img_in_rsp.shape, device,
+                                         interp="nearest" if smooth_labels == "nearest" else "linear")
+                # (first model plane, planes this piece is responsible for) - the triple split's
+                # pieces and the ranges its reassembly keeps, so the seams fall where they do now
+                n_z = img_in_rsp.shape[2]
+                if do_triple_split:
+                    smooth_pieces = {"s01": (0, (0, third)),
+                                     "s02": (third + 1 - margin, (third, third * 2)),
+                                     "s03": (third * 2 + 1 - margin, (third * 2, n_z))}
+                else:
+                    smooth_pieces = {"s01": (0, (0, n_z))}
+
             if multimodel:
                 class_map_inv = {v: k for k, v in class_map[task_name].items()}
                 segmentations = {
@@ -781,12 +814,26 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
                                 for img_part, (data, properties) in raw_inputs.items()
                             }
                             cached_preprocessing_signature = signature
+                        painters = {}
+                        if smooth is not None:
+                            if tuple(predictor.plans_manager.transpose_forward) != (0, 1, 2):
+                                raise ValueError("smooth_labels does not support models that transpose their input.")
+                            smooth_lut = None
+                            if multimodel:
+                                part_map = class_map_parts[map_taskid_to_partname[tid]]
+                                smooth_lut = np.zeros(max(part_map.keys()) + 1, dtype=np.int64)
+                                for local_label, class_name in part_map.items():
+                                    smooth_lut[local_label] = class_map_inv[class_name]
+                            for img_part, (z_offset, keep) in smooth_pieces.items():
+                                painters[img_part] = partial(smooth.paint, lut=smooth_lut,
+                                                             z_offset=z_offset, keep=keep)
                         predicted_parts = {
                             img_part: _predict_preprocessed_nnunet_array(
                                 predictor,
                                 preprocessed,
                                 properties,
                                 use_cropped_logits_resampling,
+                                on_logits=painters.get(img_part),
                             )
                             for img_part, (preprocessed, properties)
                             in cached_preprocessed_inputs.items()
@@ -993,7 +1040,12 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
                                          normalized_intensities=normalized_intensities)
             if not quiet: print(f"  calculated in {time.time()-st:.2f}s")
 
-        if resample is not None and not save_lowres:
+        if smooth_labels:
+            # Already on the input grid: painted from each model's logits during prediction.
+            # Statistics and the preview above used the model-grid labels, as they do by default.
+            img_pred = remove_auxiliary_labels(nib.Nifti1Image(smooth.result(), img_in.affine), task_name)
+            del smooth
+        elif resample is not None and not save_lowres:
             if not quiet: print("Resampling...")
             if verbose: print(f"  back to original shape: {img_in_shape}")
             # Use force_affine otherwise output affine sometimes slightly off (which then is even increased

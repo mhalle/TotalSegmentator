@@ -212,7 +212,7 @@ def totalsegmentator(input: Union[str, Path, Nifti1Image], output: Union[str, Pa
                      robust_crop=False, higher_order_resampling_LEGACY=False, higher_order_resampling=False,
                      save_probabilities=None,
                      debug=False, report=None, statistics_extra=False, save_lowres=False, resampling_order=3,
-                     plans="nnUNetPlans", model_size="big"):
+                     plans="nnUNetPlans", model_size="big", smooth_labels=False):
     """
     Run TotalSegmentator from within python.
 
@@ -342,6 +342,10 @@ def totalsegmentator(input: Union[str, Path, Nifti1Image], output: Union[str, Pa
     if higher_order_resampling and save_lowres:
         raise ValueError("save_lowres cannot be used together with --higher_order_resampling "
                          "(higher-order resampling upsamples to the input resolution).")
+
+    if smooth_labels and (higher_order_resampling or higher_order_resampling_LEGACY or save_lowres):
+        raise ValueError("smooth_labels cannot be used together with --higher_order_resampling, "
+                         "--higher_order_resampling_LEGACY or --save_lowres.")
 
     if higher_order_resampling:
         resample = None
@@ -499,7 +503,8 @@ def totalsegmentator(input: Union[str, Path, Nifti1Image], output: Union[str, Pa
                             debug=debug, save_lowres=save_lowres,
                             resampling_order=resampling_order, plans=plans,
                             vertebrae_body_mask=vertebrae_body_mask, output_task_name=task,
-                            use_cropped_logits_resampling=higher_order_resampling)
+                            use_cropped_logits_resampling=higher_order_resampling,
+                            smooth_labels=smooth_labels)
     try:
         # this can result in error if running multiple processes in parallel because all try to write the same file.
         # Trying to fix with lock from portalocker did not work. Network drive seems to not support this locking.

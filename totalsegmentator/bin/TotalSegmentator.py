@@ -147,6 +147,11 @@ def main():
                         help="Use cropped-logits resampling during nnU-Net export for lower memory usage.",
                         default=False)
 
+    parser.add_argument("-sm", "--smooth_labels", action="store_true",
+                        help="Smooth label maps: interpolate each model's logits onto the input grid on the GPU "
+                             "instead of upsampling the label map with nearest neighbor. Needs the labelfield package.",
+                        default=False)
+
     parser.add_argument("-s", "--statistics", nargs='?', const=True, default=False,
                         metavar="filepath",
                         help="Calc volume (in mm3) and mean intensity. Results will be in statistics.json in the output directory. Optionally specify a custom output path for statistics.json.")
@@ -294,7 +299,8 @@ def main():
                      higher_order_resampling=args.higher_order_resampling,
                      save_probabilities=args.save_probabilities, debug=args.debug, report=args.report,
                      statistics_extra=args.statistics_extra, save_lowres=args.save_lowres,
-                     resampling_order=args.resampling_order, model_size=args.model_size)
+                     resampling_order=args.resampling_order, model_size=args.model_size,
+                     smooth_labels=args.smooth_labels)
 
 
 if __name__ == '__main__':
