@@ -122,9 +122,6 @@ class SmoothLabels(unittest.TestCase):
         np.testing.assert_array_equal(self.smooth_pipeline("nearest", device), self.default_pipeline())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ResolveSmoothLabels(unittest.TestCase):
     """What smooth_labels means for a call: "auto" is smooth wherever it applies, quietly nearest
@@ -158,3 +155,32 @@ class ResolveSmoothLabels(unittest.TestCase):
         src = open("totalsegmentator/bin/TotalSegmentator.py").read()
         self.assertIn('parser.set_defaults(smooth_labels="auto")', src)
         self.assertIn('"--nearest_labels", action="store_const", dest="smooth_labels", const=False', src)
+
+
+class NoLeak(unittest.TestCase):
+    """The first smooth call's arrays and models must not outlive it (labelfield < 0.1.3 kept a
+    failed triton import's traceback, which reached every frame live at that import)."""
+
+    def test_the_first_call_is_released(self):
+        import subprocess
+        import sys
+        script = """
+import gc, sys, weakref
+sys.modules["triton"] = None
+class Big: pass
+def first_call():
+    big = Big()
+    import torch
+    import totalsegmentator.smooth_labels as sl
+    c = sl.SmoothComposite((8, 8, 8), (4, 4, 4), "cpu")
+    c.paint(torch.zeros(2, 4, 4, 4), {"bbox_used_for_cropping": [[0, 4]] * 3,
+            "shape_after_cropping_and_before_resampling": (4, 4, 4)})
+    return weakref.ref(big)
+r = first_call(); gc.collect(); print("freed" if r() is None else "leaked")
+"""
+        out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+        self.assertEqual(out.stdout.strip(), "freed", out.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

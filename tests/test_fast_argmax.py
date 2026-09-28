@@ -62,5 +62,23 @@ class FastArgmax(unittest.TestCase):
         self.assertIsNone(_logits_to_segmentation(p, logits, props))
 
 
+
+class TorchThreads(unittest.TestCase):
+    """The thread count is process-wide, so it is set for every prediction, cached model or not:
+    a CPU call after a GPU call must not run on the GPU's single thread."""
+
+    def test_cpu_after_gpu_gets_all_threads(self):
+        import multiprocessing
+        from totalsegmentator.nnunet import _configure_torch_device
+        before = torch.get_num_threads()
+        try:
+            self.assertEqual(_configure_torch_device(torch.device("cpu")), torch.device("cpu"))
+            self.assertEqual(torch.get_num_threads(), 1)          # as after any GPU build
+            self.assertEqual(_configure_torch_device("cpu"), torch.device("cpu"))
+            self.assertEqual(torch.get_num_threads(), multiprocessing.cpu_count())
+        finally:
+            torch.set_num_threads(before)
+
+
 if __name__ == "__main__":
     unittest.main()

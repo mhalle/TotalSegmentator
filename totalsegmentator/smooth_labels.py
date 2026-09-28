@@ -13,11 +13,23 @@ fused kernel from labelfield (Metal on Apple GPUs, Triton on CUDA, torch on anyt
 An input voxel is mapped to the logits through every step the input went through, in order:
 change_spacing's forward resample (scipy.ndimage.zoom: the voxel-corner rule), the triple split
 along z, nnU-Net's crop to the nonzero region, and nnU-Net's own resample (the voxel-center
-rule; the identity here, since the input already has the model's spacing). With
-interp="nearest" the result is the default pipeline's output exactly.
+rule; usually the identity, since the input already has the model's spacing, but not for a
+task whose spacing differs from its plans', such as lung_nodules). With interp="nearest" the
+result is the default pipeline's upsampled labels exactly where that resample is the identity,
+and before postprocessing: the default postprocesses (-rmb, vertebrae_pp, body) on the model grid
+and then upsamples, the smooth path upsamples and then postprocesses on the input grid.
 """
 import numpy as np
 import torch
+
+try:
+    from labelfield.backends import triton_gpu as _triton_gpu
+    # labelfield < 0.1.3 keeps a failed triton import as an exception; its traceback reaches every
+    # frame live at that import (a whole prediction's arrays and models) for the life of the process
+    if isinstance(getattr(_triton_gpu, "_TRITON_IMPORT_ERROR", None), BaseException):
+        _triton_gpu._TRITON_IMPORT_ERROR.__traceback__ = None
+except ImportError:
+    pass
 
 
 def _labelfield():
@@ -95,7 +107,7 @@ class SmoothComposite:
                 slab = slab.to(self.device)
             # out_start keeps each input plane's coordinate a * j + b, computed from its own index
             # (only the integer lo moves into b), so slabs decide exactly as one call would
-            mapping = self.lf.Mapping(full.a, (b - lo, full.b[1], full.b[2]))
+            mapping = full >> self.lf.Mapping((1.0, 1.0, 1.0), (-lo, 0.0, 0.0))
             self.lf.to_labels(slab, (jb - ja, *self.out_shape[1:]), mapping, interp=self.interp,
                               lut=table, paint=True, transparent="zero", out=self.out[ja:jb],
                               out_start=(ja, 0, 0))

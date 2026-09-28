@@ -93,7 +93,12 @@ def remove_small_blobs_multilabel(data, class_map, rois, interval=[10, 30], debu
 
     class_map_inv = {v: k for k, v in class_map.items()}
     roi_labels = {class_map_inv[roi] for roi in rois}
-    if roi_labels >= set(range(1, int(data.max()) + 1)):    # every label the image can hold (-rmb)
+    if data.size == 0:
+        return data
+    lo, hi = int(data.min()), int(data.max())
+    # every label the image can hold (-rmb): one labeling of the whole image. Otherwise (body,
+    # negative labels) only the rois' voxels are labeled; that path is always correct.
+    if lo >= 0 and hi <= len(roi_labels) and roi_labels >= set(range(1, hi + 1)):
         blobs, n = cc3d.connected_components(data, connectivity=6, return_N=True)
     else:                                                    # only some (body): the others are not blobs
         in_rois = np.isin(data, np.array(sorted(roi_labels), dtype=data.dtype))

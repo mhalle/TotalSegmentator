@@ -444,7 +444,8 @@ def totalsegmentator(input: Union[str, Path, Nifti1Image], output: Union[str, Pa
             # If crop_model is specified, run totalsegmentator for the crop model
             organ_seg = totalsegmentator(input, None, task=crop_model, nr_thr_resamp=nr_thr_resamp, 
                                          device=convert_device_to_string(device), quiet=quiet, verbose=verbose,
-                                         resampling_order=resampling_order)
+                                         resampling_order=resampling_order, smooth_labels=False,
+                                         keep_models=keep_models)
             class_map_inv = {v: k for k, v in class_map[crop_model].items()}
 
         crop_mask = np.zeros(organ_seg.shape, dtype=np.uint8)

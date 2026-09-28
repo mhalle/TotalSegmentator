@@ -262,23 +262,7 @@ def _build_nnunetv2_predictor(task_id, model="3d_fullres", folds=None,
     """
     model_folder = get_output_folder(task_id, trainer, plans, model)
 
-    assert device in ['cpu', 'cuda',
-                           'mps'] or isinstance(device, torch.device), f'-device must be either cpu, mps or cuda. Other devices are not tested/supported. Got: {device}.'
-    if device == 'cpu':
-        # let's allow torch to use hella threads
-        import multiprocessing
-        torch.set_num_threads(multiprocessing.cpu_count())
-        device = torch.device('cpu')
-    elif device == 'cuda':
-        # multithreading in torch doesn't help nnU-Net if run on GPU
-        torch.set_num_threads(1)
-        # torch.set_num_interop_threads(1)  # throws error if setting the second time
-        device = torch.device('cuda')
-    elif isinstance(device, torch.device):
-        torch.set_num_threads(1)
-        device = device
-    else:
-        device = torch.device('mps')
+    device = _configure_torch_device(device)
     disable_tta = not tta
     verbose = False
     chk = "checkpoint_final.pth"
@@ -336,6 +320,28 @@ def _create_nnunetv2_predictor(task_id, model="3d_fullres", folds=None,
 # predictor carries nothing from one image to the next - nnU-Net loads the fold weights into the
 # network on every prediction. Keyed by everything that shapes a predictor. Concurrent calls that
 # share a cached model are not supported; run them in one thread.
+def _configure_torch_device(device):
+    """The torch device for `device`, with torch's thread count set for it. Runs for every
+    prediction (a model from the keep_models cache included): the thread count is process-wide."""
+    assert device in ['cpu', 'cuda',
+                           'mps'] or isinstance(device, torch.device), f'-device must be either cpu, mps or cuda. Other devices are not tested/supported. Got: {device}.'
+    if device == 'cpu':
+        # let's allow torch to use hella threads
+        import multiprocessing
+        torch.set_num_threads(multiprocessing.cpu_count())
+        return torch.device('cpu')
+    elif device == 'cuda':
+        # multithreading in torch doesn't help nnU-Net if run on GPU
+        torch.set_num_threads(1)
+        # torch.set_num_interop_threads(1)  # throws error if setting the second time
+        return torch.device('cuda')
+    elif isinstance(device, torch.device):
+        torch.set_num_threads(1)
+        return device
+    else:
+        return torch.device('mps')
+
+
 _PREDICTOR_CACHE = {}
 _PREDICTOR_CACHE_LOCK = threading.Lock()
 
@@ -352,6 +358,8 @@ def clear_model_cache():
     nnunet_predict_from_raw_data.compute_gaussian.cache_clear()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
 
 def resolve_smooth_labels(smooth_labels, *, resample, save_lowres=False, higher_order_resampling_LEGACY=False,
@@ -362,7 +370,9 @@ def resolve_smooth_labels(smooth_labels, *, resample, save_lowres=False, higher_
     resamples, an output at input resolution, none of higher_order_resampling_LEGACY,
     save_probabilities or a test mode, and labelfield installed - and the nearest-neighbor
     upsample otherwise, silently. True asks for it and raises where it cannot apply; "nearest"
-    runs the same path with nearest interpolation (it reproduces the default output exactly).
+    runs the same path with nearest interpolation (it reproduces the default upsampled labels
+    exactly where nnU-Net's own resample is the identity; postprocessing then runs on the input
+    grid, so -rmb, vertebrae_pp and body can differ from the default at a few boundary voxels).
     """
     if smooth_labels in (False, None):
         return False
@@ -375,7 +385,7 @@ def resolve_smooth_labels(smooth_labels, *, resample, save_lowres=False, higher_
             import labelfield  # noqa: F401
         except ImportError:
             warnings.warn("smooth labels need the labelfield package; using nearest-neighbor upsampling. "
-                          "pip install 'labelfield @ git+https://github.com/mhalle/labelfield.git'")
+                          "pip install 'labelfield[torch] @ git+https://github.com/mhalle/labelfield.git'")
             return False
         return "linear"
     if resample is None or save_lowres:
@@ -561,14 +571,14 @@ def _postprocess_multilabel(img_pred, task_name, remove_small_blobs, quiet=False
     """
     # Postprocessing multilabel
     if task_name == "body":
-        img_pred_pp = keep_largest_blob_multilabel(img_pred.get_fdata().astype(np.uint8),
+        img_pred_pp = keep_largest_blob_multilabel(np.asanyarray(img_pred.dataobj).astype(np.uint8),
                                                    class_map[task_name], ["body_trunc"], debug=False, quiet=quiet)
         img_pred = nib.Nifti1Image(img_pred_pp, img_pred.affine)
 
     if task_name == "body":
         vox_vol = np.prod(img_pred.header.get_zooms())
         size_thr_mm3 = 50000
-        img_pred_pp = remove_small_blobs_multilabel(img_pred.get_fdata().astype(np.uint8),
+        img_pred_pp = remove_small_blobs_multilabel(np.asanyarray(img_pred.dataobj).astype(np.uint8),
                                                     class_map[task_name], ["body_extremities"],
                                                     interval=[size_thr_mm3/vox_vol, 1e10], debug=False, quiet=quiet)
         img_pred = nib.Nifti1Image(img_pred_pp, img_pred.affine)
@@ -576,7 +586,7 @@ def _postprocess_multilabel(img_pred, task_name, remove_small_blobs, quiet=False
     if task_name == "vertebrae_pp":
         voxel_spacing = img_pred.header.get_zooms()
         vox_vol = np.prod(img_pred.header.get_zooms())
-        img_pred_pp = postprocess_vertebrae_pp(img_pred.get_fdata().astype(np.uint8),
+        img_pred_pp = postprocess_vertebrae_pp(np.asanyarray(img_pred.dataobj).astype(np.uint8),
                                                class_map[task_name], voxel_volume=vox_vol,
                                                voxel_spacing=voxel_spacing, verbose=verbose)
         img_pred = nib.Nifti1Image(img_pred_pp, img_pred.affine)
@@ -587,7 +597,7 @@ def _postprocess_multilabel(img_pred, task_name, remove_small_blobs, quiet=False
         st = time.time()
         vox_vol = np.prod(img_pred.header.get_zooms())
         size_thr_mm3 = 200 if remove_small_blobs is True else remove_small_blobs
-        img_pred_pp = remove_small_blobs_multilabel(img_pred.get_fdata().astype(np.uint8),
+        img_pred_pp = remove_small_blobs_multilabel(np.asanyarray(img_pred.dataobj).astype(np.uint8),
                                                     class_map[task_name], list(class_map[task_name].values()),
                                                     interval=[size_thr_mm3/vox_vol, 1e10], debug=False, quiet=quiet)
         img_pred = nib.Nifti1Image(img_pred_pp, img_pred.affine)
@@ -927,7 +937,7 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
                         with _PREDICTOR_CACHE_LOCK:
                             predictor = _PREDICTOR_CACHE.get(key) if keep_models else None
                         if predictor is not None:
-                            pass
+                            _configure_torch_device(device)
                         elif predictor_future is not None and tid == predictor_future_task_id:
                             predictor = predictor_future.result()
                             predictor_future = None

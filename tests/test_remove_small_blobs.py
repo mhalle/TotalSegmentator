@@ -76,5 +76,20 @@ class RemoveSmallBlobs(unittest.TestCase):
         self.check(data, class_map, ["a"], [3, 1e10])
 
 
+    def test_empty_negative_and_huge_labels(self):
+        """edge cases the per-class loop handled: an empty array, labels outside the rois below 0,
+        and a large label value (the whole-image shortcut must not enumerate up to it)"""
+        class_map = {1: "a", 2: "b"}
+        empty = np.zeros((0, 4, 4), np.int32)
+        self.assertEqual(remove_small_blobs_multilabel(empty, class_map, ["a", "b"], interval=[3, 1e10],
+                                                       quiet=True).size, 0)
+        data = speckled((20, 21, 22), 2, seed=3).astype(np.int32)
+        data[data == 0] = -1                      # a label that is not in class_map
+        self.check(data, class_map, ["a", "b"], [5, 1e10])
+        big = data.copy()
+        big[0, 0, 0] = 10 ** 9
+        self.check(big, class_map, ["a", "b"], [5, 1e10])
+
+
 if __name__ == "__main__":
     unittest.main()
