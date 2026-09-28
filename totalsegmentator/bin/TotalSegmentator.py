@@ -147,10 +147,14 @@ def main():
                         help="Use cropped-logits resampling during nnU-Net export for lower memory usage.",
                         default=False)
 
-    parser.add_argument("-sm", "--smooth_labels", action="store_true",
-                        help="Smooth label maps: interpolate each model's logits onto the input grid on the GPU "
-                             "instead of upsampling the label map with nearest neighbor. Needs the labelfield package.",
-                        default=False)
+    smooth = parser.add_mutually_exclusive_group()
+    smooth.add_argument("-nl", "--nearest_labels", action="store_const", dest="smooth_labels", const=False,
+                        help="Upsample the label map to the input resolution with nearest neighbor (blocky at the "
+                             "model's voxel size), as TotalSegmentator did before smooth labels became the default.")
+    smooth.add_argument("-sm", "--smooth_labels", action="store_const", dest="smooth_labels", const=True,
+                        help="Require smooth label maps (the default wherever they apply): each model's logits are "
+                             "interpolated onto the input grid. Raises where they cannot apply.")
+    parser.set_defaults(smooth_labels="auto")
 
     parser.add_argument("-s", "--statistics", nargs='?', const=True, default=False,
                         metavar="filepath",

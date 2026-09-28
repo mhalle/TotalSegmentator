@@ -354,6 +354,38 @@ def clear_model_cache():
         torch.cuda.empty_cache()
 
 
+def resolve_smooth_labels(smooth_labels, *, resample, save_lowres=False, higher_order_resampling_LEGACY=False,
+                          save_probabilities=None, test=0):
+    """What smooth_labels means for this call: False, "linear" or "nearest".
+
+    "auto" (the default of totalsegmentator()) is smooth wherever it applies - a task that
+    resamples, an output at input resolution, none of higher_order_resampling_LEGACY,
+    save_probabilities or a test mode, and labelfield installed - and the nearest-neighbor
+    upsample otherwise, silently. True asks for it and raises where it cannot apply; "nearest"
+    runs the same path with nearest interpolation (it reproduces the default output exactly).
+    """
+    if smooth_labels in (False, None):
+        return False
+    applies = (resample is not None and not save_lowres and not higher_order_resampling_LEGACY
+               and save_probabilities is None and test == 0)
+    if smooth_labels == "auto":
+        if not applies:
+            return False
+        try:
+            import labelfield  # noqa: F401
+        except ImportError:
+            warnings.warn("smooth labels need the labelfield package; using nearest-neighbor upsampling. "
+                          "pip install 'labelfield @ git+https://github.com/mhalle/labelfield.git'")
+            return False
+        return "linear"
+    if resample is None or save_lowres:
+        raise ValueError("smooth_labels needs a task that resamples, and an output at input resolution.")
+    if higher_order_resampling_LEGACY or save_probabilities is not None or test != 0:
+        raise ValueError("smooth_labels is not supported together with higher_order_resampling_LEGACY, "
+                         "save_probabilities or test mode.")
+    return "nearest" if smooth_labels == "nearest" else "linear"
+
+
 def _shutdown_predictor_loader(executor, future, wait=True):
     if future is not None:
         future.cancel()
@@ -582,8 +614,9 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
     resampling_order: interpolation order for input image resampling
     cascade: nibabel image or None
     smooth_labels: interpolate each model's logits onto the input grid instead of upsampling the
-                   label map with nearest neighbor (see smooth_labels.py). "nearest" gives the
-                   default output through the same path (for testing).
+                   label map with nearest neighbor (see smooth_labels.py): False, True, "auto"
+                   (smooth wherever it applies; resolve_smooth_labels) or "nearest" (the same path
+                   with nearest interpolation, which reproduces the nearest-neighbor output).
     keep_models: keep the models loaded after this call, so the next call with the same task skips
                  building and loading them. Holds their memory until clear_model_cache().
 
@@ -641,12 +674,9 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
     if save_lowres and crop is not None:
         raise ValueError("save_lowres is not supported together with cropping or roi_subset.")
 
-    if smooth_labels:
-        if resample is None or save_lowres:
-            raise ValueError("smooth_labels needs a task that resamples, and an output at input resolution.")
-        if higher_order_resampling_LEGACY or save_probabilities is not None or test != 0:
-            raise ValueError("smooth_labels is not supported together with higher_order_resampling_LEGACY, "
-                             "save_probabilities or test mode.")
+    smooth_labels = resolve_smooth_labels(smooth_labels, resample=resample, save_lowres=save_lowres,
+                                          higher_order_resampling_LEGACY=higher_order_resampling_LEGACY,
+                                          save_probabilities=save_probabilities, test=test)
 
     if v1_order and task_name in ["total", "total_v2"]:
         label_map = class_map["total_v1"]
@@ -865,7 +895,7 @@ def nnUNet_predict_image(file_in: Union[str, Path, Nifti1Image], file_out, task_
             if smooth_labels:
                 from totalsegmentator.smooth_labels import SmoothComposite
                 smooth = SmoothComposite(img_in.shape, img_in_rsp.shape, device,
-                                         interp="nearest" if smooth_labels == "nearest" else "linear")
+                                         interp=smooth_labels)
                 # (first model plane, planes this piece is responsible for) - the triple split's
                 # pieces and the ranges its reassembly keeps, so the seams fall where they do now
                 n_z = img_in_rsp.shape[2]

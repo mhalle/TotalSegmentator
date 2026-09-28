@@ -212,12 +212,17 @@ def totalsegmentator(input: Union[str, Path, Nifti1Image], output: Union[str, Pa
                      robust_crop=False, higher_order_resampling_LEGACY=False, higher_order_resampling=False,
                      save_probabilities=None,
                      debug=False, report=None, statistics_extra=False, save_lowres=False, resampling_order=3,
-                     plans="nnUNetPlans", model_size="big", smooth_labels=False, keep_models=False):
+                     plans="nnUNetPlans", model_size="big", smooth_labels="auto", keep_models=False):
     """
     Run TotalSegmentator from within python.
 
     For explanation of the arguments see description of command line
     arguments in bin/TotalSegmentator.
+
+    smooth_labels: "auto" (default) interpolates each model's logits onto the input grid wherever
+    that applies, and upsamples the label map with nearest neighbor elsewhere; False always upsamples
+    with nearest neighbor (the output of TotalSegmentator before smooth labels); True requires smooth
+    labels and raises where they cannot apply.
 
     keep_models: keep the models loaded after this call, so later calls with the same task skip
     building and loading them (~17 s for `total` on an A10). Their memory stays held until
@@ -347,7 +352,8 @@ def totalsegmentator(input: Union[str, Path, Nifti1Image], output: Union[str, Pa
         raise ValueError("save_lowres cannot be used together with --higher_order_resampling "
                          "(higher-order resampling upsamples to the input resolution).")
 
-    if smooth_labels and (higher_order_resampling or higher_order_resampling_LEGACY or save_lowres):
+    if smooth_labels not in ("auto", False, None) and (higher_order_resampling or higher_order_resampling_LEGACY
+                                                       or save_lowres):
         raise ValueError("smooth_labels cannot be used together with --higher_order_resampling, "
                          "--higher_order_resampling_LEGACY or --save_lowres.")
 

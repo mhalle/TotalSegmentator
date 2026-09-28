@@ -124,3 +124,37 @@ class SmoothLabels(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResolveSmoothLabels(unittest.TestCase):
+    """What smooth_labels means for a call: "auto" is smooth wherever it applies, quietly nearest
+    elsewhere; True raises where it cannot apply."""
+
+    def test_auto_is_smooth_where_it_applies(self):
+        from totalsegmentator.nnunet import resolve_smooth_labels
+        self.assertEqual(resolve_smooth_labels("auto", resample=[1.5, 1.5, 1.5]), "linear")
+
+    def test_auto_is_quietly_nearest_where_it_cannot_apply(self):
+        from totalsegmentator.nnunet import resolve_smooth_labels
+        for kw in ({"resample": None}, {"resample": [1.5] * 3, "save_lowres": True},
+                   {"resample": [1.5] * 3, "higher_order_resampling_LEGACY": True},
+                   {"resample": [1.5] * 3, "save_probabilities": "p.npz"}, {"resample": [1.5] * 3, "test": 1}):
+            self.assertIs(resolve_smooth_labels("auto", **kw), False, kw)
+
+    def test_explicit_true_raises_where_it_cannot_apply(self):
+        from totalsegmentator.nnunet import resolve_smooth_labels
+        self.assertEqual(resolve_smooth_labels(True, resample=[3.0] * 3), "linear")
+        self.assertEqual(resolve_smooth_labels("nearest", resample=[3.0] * 3), "nearest")
+        with self.assertRaises(ValueError):
+            resolve_smooth_labels(True, resample=None)
+        with self.assertRaises(ValueError):
+            resolve_smooth_labels(True, resample=[1.5] * 3, save_lowres=True)
+
+    def test_off(self):
+        from totalsegmentator.nnunet import resolve_smooth_labels
+        self.assertIs(resolve_smooth_labels(False, resample=[1.5] * 3), False)
+
+    def test_the_cli_default_is_auto_and_the_flags_set_it(self):
+        src = open("totalsegmentator/bin/TotalSegmentator.py").read()
+        self.assertIn('parser.set_defaults(smooth_labels="auto")', src)
+        self.assertIn('"--nearest_labels", action="store_const", dest="smooth_labels", const=False', src)
