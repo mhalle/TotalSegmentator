@@ -47,7 +47,7 @@ setup(name='TotalSegmentator',
             'torch>=2.1.2',  # torch < 2.6.0 required if using nnunetv2 < 2.6.0
             # smooth label maps (the default): the fused logits-to-labels kernels. Not on PyPI, so a
             # direct git reference - fine for installing this fork from git, not for a PyPI upload.
-            'labelfield @ git+https://github.com/mhalle/labelfield.git@v0.1.3',
+            'labelfield @ git+https://github.com/mhalle/labelfield.git@v0.1.4',
             'numpy',
             'SimpleITK',
             'nibabel>=2.3.0',
